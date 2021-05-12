@@ -1731,6 +1731,12 @@ int main(int argc, char *argv[])
     icedemo.opt.comp_cnt = 1;
     icedemo.opt.max_host = -1;
 
+// init params
+    icedemo.opt.stun_srv = pj_str(TURN_SERVER_HOST);
+    icedemo.opt.turn_srv = pj_str(TURN_SERVER_HOST);
+    icedemo.opt.turn_username = pj_str(TURN_USERNAME);
+    icedemo.opt.turn_password = pj_str(TURN_PASSWORD);
+    
     while((c=pj_getopt_long(argc,argv, "c:n:s:t:u:p:H:L:hTFR", long_options, &opt_id))!=-1) {
 	switch (c) {
 	case 'c':
