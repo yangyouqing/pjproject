@@ -21,19 +21,21 @@
 #include <pjlib.h>
 #include <pjlib-util.h>
 #include <pjnath.h>
+#include <string.h>
+#include <unistd.h>
 
-#include <mqtt.h>
+#include "umqtt.h"
 #include "ice_common.h"
-//#include "templates/posix_sockets.h"
 
+#define THIS_FILE   "icedemo.c"
 
-
-#define THIS_FILE   "ice_peer.c"
 
 /* For this demo app, configure longer STUN keep-alive time
  * so that it does't clutter the screen output.
  */
 #define KA_INTERVAL 300
+
+#define UMQTT_PEER_SEND_INTERVAL  1
 
 
 /* This is our global variables */
@@ -76,10 +78,6 @@ static struct app_t
     } rem;
 
 } icedemo;
-
-
-static struct mqtt_client client;
-
 
 /* Utility to display error messages */
 static void icedemo_perror(const char *title, pj_status_t status)
@@ -216,73 +214,6 @@ static int icedemo_worker_thread(void *unused)
 }
 
 /*
- * Send application data to remote agent.
- */
-/*
- * Send application data to remote agent.
- */
-static void icedemo_send_data(unsigned comp_id, const char *data)
-{
-    pj_status_t status;
-
-    if (icedemo.icest == NULL) {
-	PJ_LOG(1,(THIS_FILE, "Error: No ICE instance, create it first"));
-	return;
-    }
-
-    if (!pj_ice_strans_has_sess(icedemo.icest)) {
-	PJ_LOG(1,(THIS_FILE, "Error: No ICE session, initialize first"));
-	return;
-    }
-
-    /*
-    if (!pj_ice_strans_sess_is_complete(icedemo.icest)) {
-	PJ_LOG(1,(THIS_FILE, "Error: ICE negotiation has not been started or is in progress"));
-	return;
-    }
-    */
-
-    if (comp_id<1||comp_id>pj_ice_strans_get_running_comp_cnt(icedemo.icest)) {
-	PJ_LOG(1,(THIS_FILE, "Error: invalid component ID"));
-	return;
-    }
-    char lip[PJ_INET6_ADDRSTRLEN + 10];
-	char rip[PJ_INET6_ADDRSTRLEN + 10];
-    	
-#if 0
-    status = pj_ice_strans_sendto2(icedemo.icest, comp_id, data, strlen(data),
-				   &icedemo.rem.def_addr[comp_id-1],
-				   pj_sockaddr_get_len(&icedemo.rem.def_addr[comp_id-1]));
-
-    if (status != PJ_SUCCESS && status != PJ_EPENDING)
-	icedemo_perror("Error sending data", status);
-    else
-	PJ_LOG(3,(THIS_FILE, "Send data to %s\n", pj_sockaddr_print(&icedemo.rem.def_addr[comp_id-1], ipstr, sizeof(ipstr), 3)));
-#else
-    const pj_ice_sess_check *valid_pair;
-
-    valid_pair = pj_ice_strans_get_valid_pair(icedemo.icest, comp_id);
-    if (valid_pair) {
-        pj_sockaddr_print(&valid_pair->lcand->addr, lip, sizeof(lip), 3);
-		pj_sockaddr_print(&valid_pair->rcand->addr, rip, sizeof(rip), 3);	
-        
-        status = pj_ice_strans_sendto2(icedemo.icest, comp_id, data, strlen(data),
-    				   &valid_pair->rcand->addr,
-    				   pj_sockaddr_get_len(&valid_pair->rcand->addr));
-
-        if (status != PJ_SUCCESS && status != PJ_EPENDING)
-    	icedemo_perror("Error sending data", status);
-        else
-    	PJ_LOG(3,(THIS_FILE, "[%s %s] Send data to [%s %s]\n", 
-    	               pj_ice_get_cand_type_name(valid_pair->lcand->type), lip,
-    	               pj_ice_get_cand_type_name(valid_pair->rcand->type), rip));
-     } else {
-        PJ_LOG(3,(THIS_FILE, "ICE not ready, state: %d\n", pj_ice_strans_get_state(icedemo.icest)));
-     }
-#endif
-}
-
-/*
  * This is the callback that is registered to the ICE stream transport to
  * receive notification about incoming data. By "data" it means application
  * data such as RTP/RTCP, and not packets that belong to ICE signaling (such
@@ -308,8 +239,6 @@ static void cb_on_rx_data(pj_ice_strans *ice_st,
 	      pj_sockaddr_print(src_addr, ipstr, sizeof(ipstr), 3),
 	      (unsigned)size,
 	      (char*)pkt));
-    icedemo_send_data(1, "I AM PEER\n");
-    
 }
 
 /*
@@ -326,10 +255,6 @@ static void cb_on_ice_complete(pj_ice_strans *ice_st,
 
     if (status == PJ_SUCCESS) {
 	PJ_LOG(3,(THIS_FILE, "ICE %s successful", opname));
-        if (op == PJ_ICE_STRANS_OP_NEGOTIATION) {
-            //save realted info
-            
-        }
     } else {
 	char errmsg[PJ_ERR_MSG_SIZE];
 
@@ -789,7 +714,7 @@ static void icedemo_show_ice(void)
  * Input and parse SDP from the remote (containing remote's ICE information) 
  * and save it to global variables.
  */
-static void icedemo_input_remote()
+static void icedemo_input_remote(void)
 {
     char linebuf[80];
     unsigned media_cnt = 0;
@@ -812,7 +737,6 @@ static void icedemo_input_remote()
 
 	if (fgets(linebuf, sizeof(linebuf), stdin)==NULL)
 	    break;
-
 
 	len = strlen(linebuf);
 	while (len && (linebuf[len-1] == '\r' || linebuf[len-1] == '\n'))
@@ -1008,7 +932,6 @@ static void icedemo_input_remote()
 on_error:
     reset_rem_info();
 }
-
 
 static void icedemo_set_remote_sdp(const char* remote_sdp)
 {
@@ -1288,7 +1211,69 @@ static void icedemo_start_nego(void)
 }
 
 
+/*
+ * Send application data to remote agent.
+ */
+static void icedemo_send_data(unsigned comp_id, const char *data)
+{
+    pj_status_t status;
 
+    if (icedemo.icest == NULL) {
+	PJ_LOG(1,(THIS_FILE, "Error: No ICE instance, create it first"));
+	return;
+    }
+
+    if (!pj_ice_strans_has_sess(icedemo.icest)) {
+	PJ_LOG(1,(THIS_FILE, "Error: No ICE session, initialize first"));
+	return;
+    }
+
+    /*
+    if (!pj_ice_strans_sess_is_complete(icedemo.icest)) {
+	PJ_LOG(1,(THIS_FILE, "Error: ICE negotiation has not been started or is in progress"));
+	return;
+    }
+    */
+
+    if (comp_id<1||comp_id>pj_ice_strans_get_running_comp_cnt(icedemo.icest)) {
+	PJ_LOG(1,(THIS_FILE, "Error: invalid component ID"));
+	return;
+    }
+    char lip[PJ_INET6_ADDRSTRLEN + 10];
+	char rip[PJ_INET6_ADDRSTRLEN + 10];
+    	
+#if 0
+    status = pj_ice_strans_sendto2(icedemo.icest, comp_id, data, strlen(data),
+				   &icedemo.rem.def_addr[comp_id-1],
+				   pj_sockaddr_get_len(&icedemo.rem.def_addr[comp_id-1]));
+
+    if (status != PJ_SUCCESS && status != PJ_EPENDING)
+	icedemo_perror("Error sending data", status);
+    else
+	PJ_LOG(3,(THIS_FILE, "Send data to %s\n", pj_sockaddr_print(&icedemo.rem.def_addr[comp_id-1], ipstr, sizeof(ipstr), 3)));
+#else
+    const pj_ice_sess_check *valid_pair;
+
+    valid_pair = pj_ice_strans_get_valid_pair(icedemo.icest, comp_id);
+    if (valid_pair) {
+        pj_sockaddr_print(&valid_pair->lcand->addr, lip, sizeof(lip), 3);
+		pj_sockaddr_print(&valid_pair->rcand->addr, rip, sizeof(rip), 3);	
+        
+        status = pj_ice_strans_sendto2(icedemo.icest, comp_id, data, strlen(data),
+    				   &valid_pair->rcand->addr,
+    				   pj_sockaddr_get_len(&valid_pair->rcand->addr));
+
+        if (status != PJ_SUCCESS && status != PJ_EPENDING)
+    	icedemo_perror("Error sending data", status);
+        else
+    	PJ_LOG(3,(THIS_FILE, "[%s %s] Send data to [%s %s]\n", 
+    	               pj_ice_get_cand_type_name(valid_pair->lcand->type), lip,
+    	               pj_ice_get_cand_type_name(valid_pair->rcand->type), rip));
+     } else {
+        PJ_LOG(3,(THIS_FILE, "ICE not ready, state: %d\n", pj_ice_strans_get_state(icedemo.icest)));
+     }
+#endif
+}
 
 
 /*
@@ -1474,28 +1459,103 @@ static void icedemo_usage()
     puts("");
 }
 
+// copy from umqtt
+#define RECONNECT_INTERVAL  5
 
-static void exit_example(int status, int sockfd, pthread_t *client_daemon)
+struct config {
+    const char *host;
+    int port;
+    bool ssl;
+    bool auto_reconnect;
+    struct umqtt_connect_opts options;
+};
+
+static struct ev_timer reconnect_timer;
+static struct ev_timer send_timer;
+
+
+static struct config cfg = {
+    .host = "localhost",
+    .port = 1883,
+    .options = {
+        .keep_alive = 30,
+        .clean_session = true,
+        .username = "",
+        .password = "",
+        .will_topic = "will",
+        .will_message = "will test"
+    }
+};
+
+static void start_reconnect(struct ev_loop *loop)
 {
-    if (sockfd != -1) close(sockfd);
-    if (client_daemon != NULL) pthread_cancel(*client_daemon);
-    exit(status);
+    if (!cfg.auto_reconnect) {
+        ev_break(loop, EVBREAK_ALL);
+        return;
+    }
+
+    ev_timer_set(&reconnect_timer, RECONNECT_INTERVAL, 0.0);
+    ev_timer_start(loop, &reconnect_timer);
 }
 
-static void publish_callback(void** unused, struct mqtt_response_publish *published) 
+static void on_conack(struct umqtt_client *cl, bool sp, int code)
 {
-    /* note that published->topic_name is NOT null-terminated (here we'll change it to a c-string) */
-    char* topic_name = (char*) malloc(published->topic_name_size + 1);
-    memcpy(topic_name, published->topic_name, published->topic_name_size);
-    topic_name[published->topic_name_size] = '\0';
-    
-    /*
-        msg content should be like 
-        struct {
-            int type;
-            char *val;
+    struct umqtt_topic topics[] = {
+        {
+            .topic = JUICE_MQTT_TOPIC_ICE_PEER,
+            .qos = UMQTT_QOS0
         }
-    */
+    #if 0
+        ,
+        {
+            .topic = "test2",
+            .qos = UMQTT_QOS1
+        },
+        {
+            .topic = "test3",
+            .qos = UMQTT_QOS2
+        }
+    #endif
+    };
+
+    if (code != UMQTT_CONNECTION_ACCEPTED) {
+        umqtt_log_err("Connect failed:%d\n", code);
+        return;
+    }
+
+    umqtt_log_info("on_conack:  Session Present(%d)  code(%u)\n", sp, code);
+
+    /* Session Present */
+    if (!sp)
+        cl->subscribe(cl, topics, ARRAY_SIZE(topics));
+
+    //cl->publish(cl, "test4", "hello world", strlen("hello world"), 2, false);
+}
+
+static void on_suback(struct umqtt_client *cl, uint8_t *granted_qos, int qos_count)
+{
+    int i;
+
+    printf("on_suback, qos(");
+    for (i = 0; i < qos_count; i++)
+        printf("%d ", granted_qos[i]);
+    printf("\b)\n");
+}
+
+static void on_unsuback(struct umqtt_client *cl)
+{
+    umqtt_log_info("on_unsuback\n");
+    umqtt_log_info("Normal quit\n");
+
+    ev_break(cl->loop, EVBREAK_ALL);
+}
+
+
+static void on_publish(struct umqtt_client *cl, const char *topic, int topic_len,
+    const void *payload, int payloadlen)
+{
+    umqtt_log_info("on_publish: topic:[%.*s] payload:[%.*s]\n", topic_len, topic,
+        payloadlen, (char *)payload);
 
     int msg_type = -1;
     char *msg = NULL;
@@ -1505,19 +1565,19 @@ static void publish_callback(void** unused, struct mqtt_response_publish *publis
     char send_buf[JUICE_MQTT_MSG_MAX_SIZE];
     int send_len = 0;
 
-    if (0 == strcmp (topic_name, JUICE_MQTT_TOPIC_ICE_PEER)) {
-        msg_type = *((int*)published->application_message);
+    if (0 == strcmp (topic, JUICE_MQTT_TOPIC_ICE_PEER)) {
+        msg_type = *((int*)payload);
         msg_type = ntohl(msg_type);
 
-        msg = (char*)published->application_message + sizeof(msg_type);
+        msg = (char*)payload + sizeof(msg_type);
         printf("Received publish type:%d, msg:\n%s\n", msg_type, msg);
 
         switch (msg_type) {
             case JUICE_MQTT_MSG_TYPE_CONNECT_REQ:
                 resp_msg_type = JUICE_MQTT_MSG_TYPE_CONNECT_RESP;
                 send_len = make_publish_msg(send_buf, sizeof(send_buf), resp_msg_type, msg);
-                mqtt_publish(&client, JUICE_MQTT_TOPIC_ICE_CLIENT, send_buf, send_len, MQTT_PUBLISH_QOS_0);
-
+                //mqtt_publish(&client, JUICE_MQTT_TOPIC_ICE_CLIENT, send_buf, send_len, MQTT_PUBLISH_QOS_0);
+                cl->publish(cl, JUICE_MQTT_TOPIC_ICE_CLIENT, send_buf, send_len, UMQTT_QOS0, false);
                 
                 encode_session(sdp, sizeof (sdp));
                 sdp[strlen(sdp)] = '\n';
@@ -1525,8 +1585,8 @@ static void publish_callback(void** unused, struct mqtt_response_publish *publis
 	            printf("Local description:\n%s\n", sdp);
                 resp_msg_type = JUICE_MQTT_MSG_TYPE_SDP;
                 send_len = make_publish_msg(send_buf, sizeof(send_buf), resp_msg_type, sdp);
-                mqtt_publish(&client, JUICE_MQTT_TOPIC_ICE_CLIENT, send_buf, send_len, MQTT_PUBLISH_QOS_0);
-                
+               // mqtt_publish(&client, JUICE_MQTT_TOPIC_ICE_CLIENT, send_buf, send_len, MQTT_PUBLISH_QOS_0);
+                cl->publish(cl, JUICE_MQTT_TOPIC_ICE_CLIENT, send_buf, send_len, UMQTT_QOS0, false);
                 break;
             case JUICE_MQTT_MSG_TYPE_SDP:
                 icedemo_set_remote_sdp(msg);
@@ -1558,38 +1618,99 @@ static void publish_callback(void** unused, struct mqtt_response_publish *publis
 
     }else {
         printf ("error msg\n");
-    }
-
-    free(topic_name);
-}
-
-static void* client_refresher(void* client)
-{
-        pj_status_t status;
-    status = icedemo_init();
-    if (status != PJ_SUCCESS) {
-	    return 1;
-    }
-    // collect local candidate
-    icedemo_create_instance();
-    sleep(1);
-    icedemo_init_session('i');
-
+    }    
     
-    while(1) 
-    {
-        mqtt_sync((struct mqtt_client*) client);
-        usleep(100000U);
-    }
-    return NULL;
 }
 
+static void on_pingresp(struct umqtt_client *cl)
+{
+}
+
+static void on_error(struct umqtt_client *cl, int err, const char *msg)
+{
+    umqtt_log_err("on_error: %d: %s\n", err, msg);
+
+    start_reconnect(cl->loop);
+    free(cl);
+}
+
+static void on_close(struct umqtt_client *cl)
+{
+    umqtt_log_info("on_close\n");
+
+    start_reconnect(cl->loop);
+    free(cl);
+}
+
+static void on_net_connected(struct umqtt_client *cl)
+{
+    umqtt_log_info("on_net_connected\n");
+
+    if (cl->connect(cl, &cfg.options) < 0) {
+        umqtt_log_err("connect failed\n");
+
+        start_reconnect(cl->loop);
+        free(cl);
+    }
+}
+
+static void do_connect(struct ev_loop *loop, struct ev_timer *w, int revents)
+{
+    struct umqtt_client *cl;
+
+    cl = umqtt_new(loop, cfg.host, cfg.port, cfg.ssl);
+    if (!cl) {
+        start_reconnect(loop);
+        return;
+    }
+
+    cl->on_net_connected = on_net_connected;
+    cl->on_conack = on_conack;
+    cl->on_suback = on_suback;
+    cl->on_unsuback = on_unsuback;
+    cl->on_publish = on_publish;
+    cl->on_pingresp = on_pingresp;
+    cl->on_error = on_error;
+    cl->on_close = on_close;
+
+    umqtt_log_info("Start connect...\n");
+}
+
+static void do_send(struct ev_loop *loop, struct ev_timer *w, int revents)
+{
+
+    icedemo_send_data(1, "[from peer]......\n");
+}
+
+static void signal_cb(struct ev_loop *loop, ev_signal *w, int revents)
+{
+    ev_break(loop, EVBREAK_ALL);
+}
+
+static void usage(const char *prog)
+{
+    fprintf(stderr, "Usage: %s [option]\n"
+        "      -h host      # Default is 'localhost'\n"
+        "      -p port      # Default is 1883\n"
+        "      -i ClientId  # Default is 'libumqtt-Test\n"
+        "      -s           # Use ssl\n"
+        "      -u           # Username\n"
+        "      -P           # Password\n"
+        "      -a           # Auto reconnect to the server\n"
+        "      -d           # enable debug messages\n"
+        , prog);
+    exit(1);
+}
+// cpy end ...
 
 /*
  * And here's the main()
  */
 int main(int argc, char *argv[])
 {
+    struct ev_loop *loop = EV_DEFAULT;
+    struct ev_signal signal_watcher;
+
     struct pj_getopt_option long_options[] = {
 	{ "comp-cnt",           1, 0, 'c'},
 	{ "nameserver",		1, 0, 'n'},
@@ -1609,12 +1730,6 @@ int main(int argc, char *argv[])
 
     icedemo.opt.comp_cnt = 1;
     icedemo.opt.max_host = -1;
-
-    // init params
-    icedemo.opt.stun_srv = pj_str(TURN_SERVER_HOST);
-    icedemo.opt.turn_srv = pj_str(TURN_SERVER_HOST);
-    icedemo.opt.turn_username = pj_str(TURN_USERNAME);
-    icedemo.opt.turn_password = pj_str(TURN_PASSWORD);
 
     while((c=pj_getopt_long(argc,argv, "c:n:s:t:u:p:H:L:hTFR", long_options, &opt_id))!=-1) {
 	switch (c) {
@@ -1665,48 +1780,34 @@ int main(int argc, char *argv[])
 	}
     }
 
-//    status = icedemo_init();
-//    if (status != PJ_SUCCESS)
-//	return 1;
+    status = icedemo_init();
+    if (status != PJ_SUCCESS)
+	return 1;
 
+    // collect local candidate
+    icedemo_create_instance();
+    sleep(1);
+    icedemo_init_session('i');
 //    icedemo_console();
-/* open the non-blocking TCP socket (connecting to the broker) */
-    int sockfd = open_nb_socket(MQTT_SERVER_HOST, MQTT_SERVER_PORT);
-    if (sockfd == -1) {
-        perror("Failed to open socket: ");
-        exit_example(EXIT_FAILURE, sockfd, NULL);
-    }
 
-    /* setup a client */
-    uint8_t sendbuf[2048]; /* sendbuf should be large enough to hold multiple whole mqtt messages */
-    uint8_t recvbuf[1024]; /* recvbuf should be large enough any whole mqtt message expected to be received */
-    mqtt_init(&client, sockfd, sendbuf, sizeof(sendbuf), recvbuf, sizeof(recvbuf), publish_callback);
-    /* Create an anonymous session */
-    const char* client_id = NULL;
-    /* Ensure we have a clean session */
-    uint8_t connect_flags = MQTT_CONNECT_CLEAN_SESSION;
-    /* Send connection request to the broker. */
-    mqtt_connect(&client, client_id, NULL, NULL, 0, NULL, NULL, connect_flags, 400);
+ //   if (!cfg.options.client_id)
+ //       cfg.options.client_id = "libumqtt-Test";
 
-    /* check that we don't have any errors */
-    if (client.error != MQTT_OK) {
-        fprintf(stderr, "error: %s\n", mqtt_error_str(client.error));
-        exit_example(EXIT_FAILURE, sockfd, NULL);
-    }
+    cfg.host = MQTT_SERVER_HOST;
 
-    /* start a thread to refresh the client (handle egress and ingree client traffic) */
-    pthread_t client_daemon;
-    if(pthread_create(&client_daemon, NULL, client_refresher, &client)) {
-        fprintf(stderr, "Failed to start client daemon.\n");
-        exit_example(EXIT_FAILURE, sockfd, NULL);
+    ev_signal_init(&signal_watcher, signal_cb, SIGINT);
+    ev_signal_start(loop, &signal_watcher);
 
-    }
+    ev_timer_init(&reconnect_timer, do_connect, 0.1, 0.0);
+    ev_timer_start(loop, &reconnect_timer);
 
-    mqtt_subscribe(&client, JUICE_MQTT_TOPIC_ICE_PEER, 0);    
-    while (1) {
-        
-        sleep (1);
-    }
+    ev_timer_init(&send_timer, do_send, 0.1, 0.0);
+    ev_timer_set(&send_timer, UMQTT_PEER_SEND_INTERVAL, 1.0);
+    ev_timer_start(loop, &send_timer);
+
+    umqtt_log_info("libumqttc version %s\n", UMQTT_VERSION_STRING);
+
+    ev_run(loop, 0);
 
     err_exit("Quitting..", PJ_SUCCESS);
     return 0;

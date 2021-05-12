@@ -9,9 +9,9 @@ RULES_MAK := $(PJDIR)/build/rules.mak
 #
 #
 
-MQTT_LDFLAGS = -L../../../mqtt-c
-MQTT_LIBS = -lmqttc
-MQTT_CFLAGS = -I../../../mqtt-c/include
+MQTT_LDFLAGS = -L../../../libumqtt/src
+MQTT_LIBS = -lumqtt -lev
+MQTT_CFLAGS = -I../../../libumqtt/src -I../../../libumqtt/src/buffer
 
 export _CFLAGS 	:= $(PJ_CFLAGS) $(CFLAGS) $(PJ_VIDEO_CFLAGS) $(MQTT_CFLAGS)
 export _CXXFLAGS:= $(PJ_CXXFLAGS) $(CFLAGS) $(PJ_VIDEO_CFLAGS)
@@ -40,7 +40,7 @@ endif
 .PHONY: $(EXES)
 .PHONY: $(PJSUA2_EXES)
 
-all: $(EXES) 
+all: $(EXES) depend
 
 $(EXES):
 	$(MAKE) --no-print-directory -f $(RULES_MAK) SAMPLE_SRCDIR=$(SRCDIR) SAMPLE_OBJS="$@.o ice_common.o" SAMPLE_CFLAGS="$(_CFLAGS)" SAMPLE_CXXFLAGS="$(_CXXFLAGS)" SAMPLE_LDFLAGS="$(_LDFLAGS)" SAMPLE_EXE=$@ APP=SAMPLE app=sample $(subst /,$(HOST_PSEP),$(BINDIR)/$@)
@@ -49,6 +49,7 @@ $(PJSUA2_EXES):
 	$(MAKE) --no-print-directory -f $(RULES_MAK) PJSUA2_SAMPLE_SRCDIR=$(SRCDIR) PJSUA2_SAMPLE_OBJS=$@.o PJSUA2_SAMPLE_CFLAGS="$(_CFLAGS)" PJSUA2_SAMPLE_CXXFLAGS="$(_CXXFLAGS)" PJSUA2_SAMPLE_LDFLAGS="$(_LDXXFLAGS)" PJSUA2_SAMPLE_EXE=$@ APP=PJSUA2_SAMPLE app=pjsua2_sample $(subst /,$(HOST_PSEP),$(BINDIR)/$@)
 
 depend:
+	cp ../../../libumqtt/src/*.so* $(BINDIR)
 
 clean:
 	$(MAKE) -f $(RULES_MAK) APP=SAMPLE app=sample $@
