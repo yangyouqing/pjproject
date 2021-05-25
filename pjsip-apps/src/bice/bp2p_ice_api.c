@@ -1,0 +1,43 @@
+#include "bp2p_ice_api.h"
+#include "ice_common.h"
+#include "ev.h"
+static ice_role_t ice_role = ICE_ROLE_UNKNOWN;
+int bp2p_ice_init(ice_cfg_t *cfg)
+{
+    ice_role = cfg->role;
+
+    if (ICE_ROLE_CLIENT == cfg->role) {
+        return ice_client_init(cfg);
+    } else if (ICE_ROLE_PEER == cfg->role) {
+        return ice_peer_init(cfg);
+    }
+    return -1;
+}
+
+int bp2p_ice_start(ice_cfg_t *cfg)
+{
+    if (ICE_ROLE_CLIENT == ice_role) {
+        return ice_client_start_nego(cfg);
+    } else if (ICE_ROLE_PEER == ice_role) {
+        return ice_peer_start_nego(cfg);
+    }
+    return -1;
+}
+
+int bp2p_ice_stop(ice_cfg_t *cfg)
+{
+ //   ev_break(cfg->loop, EVBREAK_ALL);
+    printf ("ice nego stoped\n");
+}
+
+
+int bp2p_ice_send(void *data, int len)
+{
+    if (ICE_ROLE_CLIENT == ice_role) {
+        ice_client_send_data(data, len);
+    } else if (ICE_ROLE_PEER == ice_role) {
+        ice_peer_send_data(data, len);
+    }
+    return -1;
+}
+

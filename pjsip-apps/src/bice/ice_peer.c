@@ -27,7 +27,9 @@
 #include "umqtt.h"
 #include "ice_common.h"
 
-#define THIS_FILE   "icedemo.c"
+static ice_cfg_t *g_ice_cfg = NULL;
+
+#define THIS_FILE   "bice_peer.c"
 
 
 /* For this demo app, configure longer STUN keep-alive time
@@ -254,7 +256,14 @@ static void cb_on_ice_complete(pj_ice_strans *ice_st,
 	    (op==PJ_ICE_STRANS_OP_NEGOTIATION ? "negotiation" : "unknown_op"));
 
     if (status == PJ_SUCCESS) {
-	PJ_LOG(3,(THIS_FILE, "ICE %s successful", opname));
+	    PJ_LOG(3,(THIS_FILE, "ICE %s successful", opname));
+        // quit ice nego 
+        if (op == PJ_ICE_STRANS_OP_NEGOTIATION) {
+            PJ_LOG(3,(THIS_FILE, "ICE %s Done", opname));
+            if (g_ice_cfg && g_ice_cfg->cb_on_status_change) {
+                g_ice_cfg->cb_on_status_change(ICE_STATUS_COMPLETE);
+            }
+        } 
     } else {
 	char errmsg[PJ_ERR_MSG_SIZE];
 
@@ -1678,7 +1687,6 @@ static void do_connect(struct ev_loop *loop, struct ev_timer *w, int revents)
 
 static void do_send(struct ev_loop *loop, struct ev_timer *w, int revents)
 {
-
     icedemo_send_data(1, "[from peer]......\n");
 }
 
@@ -1703,6 +1711,74 @@ static void usage(const char *prog)
 }
 // cpy end ...
 
+
+
+int ice_peer_init(ice_cfg_t *ice_cfg)
+{
+    if (NULL == ice_cfg) {
+        return -1;
+    }
+
+    g_ice_cfg = ice_cfg;            
+    struct ev_loop* loop = ice_cfg->loop;
+    if (NULL == loop) {
+        return 0;
+    }
+    struct ev_signal signal_watcher;
+    struct ev_async async_watcher;
+
+    pj_status_t status;
+
+    icedemo.opt.comp_cnt = 1;
+    icedemo.opt.max_host = -1;
+
+// init params
+    icedemo.opt.stun_srv = pj_str(ice_cfg->stun_srv);
+    icedemo.opt.turn_srv = pj_str(ice_cfg->turn_srv);
+    icedemo.opt.turn_username = pj_str(ice_cfg->turn_username);
+    icedemo.opt.turn_password = pj_str(ice_cfg->turn_password);
+
+
+    cfg.host = ice_cfg->signalling_srv;
+
+    status = icedemo_init();
+    if (status != PJ_SUCCESS)
+	return -1;
+
+    // collect local candidate
+    icedemo_create_instance();
+    sleep(1);
+    icedemo_init_session('a');
+
+//    if (!cfg.options.client_id)
+//        cfg.options.client_id = "libumqtt-Test";
+
+//    ev_async_init(&async_watcher, async_cb);
+//    ev_async_start(loop, &async_watcher);
+
+    ev_signal_init(&signal_watcher, signal_cb, SIGINT);
+    ev_signal_start(loop, &signal_watcher);
+
+    ev_timer_init(&reconnect_timer, do_connect, 0.1, 0.0);
+    ev_timer_start(loop, &reconnect_timer);    
+}
+
+int ice_peer_start_nego(ice_cfg_t *cfg)
+{
+    if (NULL != cfg && NULL != cfg->loop) {
+        ev_run(cfg->loop, 0);   
+    }
+    umqtt_log_info("quit signaling channel\n");
+    return 0;
+}
+
+int ice_peer_send_data(void *data, int len)
+{
+    icedemo_send_data(1, (char *)data);
+    return 0;
+}
+
+#if 0
 /*
  * And here's the main()
  */
@@ -1818,3 +1894,4 @@ int main(int argc, char *argv[])
     err_exit("Quitting..", PJ_SUCCESS);
     return 0;
 }
+#endif

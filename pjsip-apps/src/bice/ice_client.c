@@ -26,10 +26,12 @@
 
 #include "umqtt.h"
 #include "ice_common.h"
+#include "bp2p_ice_api.h"
 
 
-#define THIS_FILE   "icedemo.c"
-
+#define THIS_FILE   "bice_client.c"
+static int is_ice_nego_succeed = 0;
+static ice_cfg_t *g_ice_cfg = NULL;
 
 /* For this demo app, configure longer STUN keep-alive time
  * so that it does't clutter the screen output.
@@ -233,11 +235,14 @@ static void cb_on_rx_data(pj_ice_strans *ice_st,
     // Don't do this! It will ruin the packet buffer in case TCP is used!
     //((char*)pkt)[size] = '\0';
 
-    PJ_LOG(3,(THIS_FILE, "Component %d: received %d bytes data from %s: \"%.*s\"",
-	      comp_id, size,
+    PJ_LOG(3,(THIS_FILE, "receive %d bytes data from [%s]: \"%.*s\"",
+	      size,
 	      pj_sockaddr_print(src_addr, ipstr, sizeof(ipstr), 3),
 	      (unsigned)size,
 	      (char*)pkt));
+    if (g_ice_cfg && g_ice_cfg->cb_on_rx_pkt) {
+        g_ice_cfg->cb_on_rx_pkt(pkt, (int)size);
+    }
 }
 
 /*
@@ -254,6 +259,14 @@ static void cb_on_ice_complete(pj_ice_strans *ice_st,
 
     if (status == PJ_SUCCESS) {
 	PJ_LOG(3,(THIS_FILE, "ICE %s successful", opname));
+    // quit ice nego 
+        if (op == PJ_ICE_STRANS_OP_NEGOTIATION) {
+            PJ_LOG(3,(THIS_FILE, "ICE %s Done", opname));
+
+            //ev_break(loop, EVBREAK_ALL);
+            //ev_async_send(loop, NULL);
+            is_ice_nego_succeed = 1;
+        }
     } else {
 	char errmsg[PJ_ERR_MSG_SIZE];
 
@@ -1238,8 +1251,8 @@ static void icedemo_send_data(unsigned comp_id, const char *data)
 	PJ_LOG(1,(THIS_FILE, "Error: invalid component ID"));
 	return;
     }
-    char lip[PJ_INET6_ADDRSTRLEN + 10];
-	char rip[PJ_INET6_ADDRSTRLEN + 10];
+    char lip[PJ_INET6_ADDRSTRLEN + 10] = {0};
+	char rip[PJ_INET6_ADDRSTRLEN + 10] = {0};
     	
 #if 0
     status = pj_ice_strans_sendto2(icedemo.icest, comp_id, data, strlen(data),
@@ -1265,7 +1278,7 @@ static void icedemo_send_data(unsigned comp_id, const char *data)
         if (status != PJ_SUCCESS && status != PJ_EPENDING)
     	icedemo_perror("Error sending data", status);
         else
-    	PJ_LOG(3,(THIS_FILE, "[%s %s] Send data to [%s %s]\n", 
+    	PJ_LOG(3,(THIS_FILE, "Send data[%s:%s-->%s:%s]\n", 
     	               pj_ice_get_cand_type_name(valid_pair->lcand->type), lip,
     	               pj_ice_get_cand_type_name(valid_pair->rcand->type), rip));
      } else {
@@ -1453,9 +1466,9 @@ static void icedemo_usage()
     puts("                           name if DNS SRV resolution is used.");
     puts(" --turn-tcp, -T            Use TCP to connect to TURN server");
     puts(" --turn-username, -u UID   Set TURN username of the credential to UID");
-    puts(" --turn-password, -p PWD   Set password of the credential to WPWD");
     puts(" --turn-fingerprint, -F    Use fingerprint for outgoing TURN requests");
     puts("");
+    puts(" --turn-password, -p PWD   Set password of the credential to WPWD");
 }
 
 
@@ -1475,7 +1488,7 @@ struct config {
 
 static struct ev_timer reconnect_timer;
 static struct ev_timer login_timer;
-static struct ev_timer send_timer;
+static struct ev_timer counter_timer;
 
 static int login_succeed = 0;
 
@@ -1513,6 +1526,7 @@ static void start_login(struct ev_loop *loop)
 
 static void stop_login(struct ev_loop *loop)
 {
+    login_succeed = 0;
     ev_timer_stop(loop, &login_timer);
 }
 
@@ -1674,7 +1688,8 @@ static void on_net_connected(struct umqtt_client *cl)
 
 static void do_connect(struct ev_loop *loop, struct ev_timer *w, int revents)
 {
-    
+        umqtt_log_info("Start connect...s\n");
+
     cl = umqtt_new(loop, cfg.host, cfg.port, cfg.ssl);
     if (!cl) {
         start_reconnect(loop);
@@ -1709,18 +1724,22 @@ static void do_login(struct ev_loop *loop, struct ev_timer *w, int revents)
     umqtt_log_info("login ...\n");
 }
 
-static void do_send(struct ev_loop *loop, struct ev_timer *w, int revents)
+static void do_counter(struct ev_loop *loop, struct ev_timer *w, int revents)
 {
     if (NULL == cl) {
-        umqtt_log_info("should connece mqtt server firstly\n");
         return ;
     }
 
-    icedemo_send_data(1, "[from client] ......\n");
+    if (1 == is_ice_nego_succeed) {
+        is_ice_nego_succeed = 0;
+        ev_break(loop, EVBREAK_ALL);
+    }
+
 }
 
 static void signal_cb(struct ev_loop *loop, ev_signal *w, int revents)
 {
+    printf ("recv signal: %d\n", revents);
     ev_break(loop, EVBREAK_ALL);
 }
 
@@ -1740,6 +1759,88 @@ static void usage(const char *prog)
 }
 // cpy end 
 
+static void async_cb(struct ev_loop *loop, ev_async *watcher, int revents)
+{
+	printf ("recv async event\n");
+    ev_break(loop, EVBREAK_ALL);
+}
+
+
+int ice_client_init(ice_cfg_t *ice_cfg)
+{
+    printf ("main thread id:%d\n", pthread_self());
+    if (NULL == ice_cfg) {
+        return -1;
+    }
+
+    g_ice_cfg = ice_cfg;            
+    struct ev_loop* loop = ice_cfg->loop;
+    if (NULL == loop) {
+        return 0;
+    }
+    struct ev_signal signal_watcher;
+    struct ev_async async_watcher;
+
+    pj_status_t status;
+
+    icedemo.opt.comp_cnt = 1;
+    icedemo.opt.max_host = -1;
+
+// init params
+    icedemo.opt.stun_srv = pj_str(ice_cfg->stun_srv);
+    icedemo.opt.turn_srv = pj_str(ice_cfg->turn_srv);
+    icedemo.opt.turn_username = pj_str(ice_cfg->turn_username);
+    icedemo.opt.turn_password = pj_str(ice_cfg->turn_password);
+
+
+    cfg.host = ice_cfg->signalling_srv;
+
+    status = icedemo_init();
+    if (status != PJ_SUCCESS)
+	return -1;
+
+    // collect local candidate
+    icedemo_create_instance();
+    sleep(1);
+    icedemo_init_session('o');
+
+//    if (!cfg.options.client_id)
+//        cfg.options.client_id = "libumqtt-Test";
+
+//    ev_async_init(&async_watcher, async_cb);
+//    ev_async_start(loop, &async_watcher);
+
+    ev_signal_init(&signal_watcher, signal_cb, SIGINT);
+    ev_signal_start(loop, &signal_watcher);
+
+    ev_timer_init(&reconnect_timer, do_connect, 0.1, 0.0);
+    ev_timer_start(loop, &reconnect_timer);
+
+    ev_timer_init(&login_timer, do_login, 0.1, 0.0);
+
+//    ev_timer_init(&counter_timer, do_counter, 0.1, 1.0);
+//    ev_timer_set(&counter_timer, 1, 1.0);
+//    ev_timer_start(loop, &counter_timer);
+    umqtt_log_info("libumqttc version %s\n", UMQTT_VERSION_STRING);
+    return 0;
+}
+
+int ice_client_start_nego(ice_cfg_t *cfg)
+{
+    if (NULL != cfg && NULL != cfg->loop) {
+        ev_run(cfg->loop, 0);   
+    }
+    umqtt_log_info("quit signaling channel\n");
+    return 0;
+}
+
+int ice_client_send_data(void *data, int len)
+{
+    icedemo_send_data(1, (char *)data);
+    return 0;
+}
+
+#if 0
 /*
  * And here's the main()
  */
@@ -1859,3 +1960,4 @@ int main(int argc, char *argv[])
     err_exit("Quitting..", PJ_SUCCESS);
     return 0;
 }
+#endif
