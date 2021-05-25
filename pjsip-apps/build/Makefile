@@ -50,7 +50,7 @@ endif
 
 export CC_OUT CC AR RANLIB HOST_MV HOST_RM HOST_RMDIR HOST_MKDIR OBJEXT LD LDOUT 
 
-TARGETS :=  samples
+TARGETS := libbice samples
 
 all: $(TARGETS)
 
@@ -87,6 +87,11 @@ $(PJSYSTEST_EXE):
 samples:
 	$(MAKE) -f Samples.mak
 
+libbice:
+	rm -f ../lib/libbice.a
+	$(MAKE) -f bice.mak clean
+	$(MAKE) -f bice.mak
+
 .PHONY: pjsua.ko
 pjsua.ko:
 	$(MAKE) -f $(RULES_MAK) APP=PJSUA app=pjsua $(subst /,$(HOST_PSEP),$(LIBDIR)/$@)
@@ -106,3 +111,4 @@ clean depend realclean:
 	    rm -f ../src/pjsua/ios-swift/Libraries/$$tmp; \
 	  done; \
 	fi;
+	-rm ../lib/libbice.a
