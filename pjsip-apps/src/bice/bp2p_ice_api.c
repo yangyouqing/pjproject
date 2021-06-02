@@ -6,6 +6,10 @@ int bp2p_ice_init(ice_cfg_t *cfg)
 {
     ice_role = cfg->role;
 
+    if (0 == strlen(cfg->my_channel)) {
+        printf("ice channel is needed\n");
+        return 0;
+    }
     if (ICE_ROLE_CLIENT == cfg->role) {
         return ice_client_init(cfg);
     } else if (ICE_ROLE_PEER == cfg->role) {
@@ -40,4 +44,19 @@ int bp2p_ice_send(void *data, int len)
     }
     return -1;
 }
+
+int bp2p_ice_get_valid_peer(struct sockaddr* peer)
+{
+    if (NULL == peer) {
+        return -1;
+    }
+    
+    if (ICE_ROLE_CLIENT == ice_role) {
+        return ice_client_get_valid_peer(peer);
+    } else if (ICE_ROLE_PEER == ice_role) {
+        return ice_peer_get_valid_peer(peer);
+    }
+    return -1;
+}
+
 

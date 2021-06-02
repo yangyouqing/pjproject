@@ -48,8 +48,8 @@ extern "C" {
 #define JUICE_MQTT_MSG_TYPE_SDP 4
 #define JUICE_MQTT_MSG_TYPE_CANDIDATE 5
 
-#define JUICE_MQTT_TOPIC_ICE_PEER "ice-peer/did-pjnath234233432"
-#define JUICE_MQTT_TOPIC_ICE_CLIENT "ice-client/pjnath12321"
+//#define JUICE_MQTT_TOPIC_ICE_PEER "peer"
+//#define JUICE_MQTT_TOPIC_ICE_CLIENT "client"
 
 
 int open_nb_socket(const char* addr, const char* port);
@@ -59,10 +59,14 @@ int make_publish_msg(char* buf, int max_buf_size, int msg_type, const char* msg)
 int ice_client_init(ice_cfg_t *ice_cfg);
 int ice_client_start_nego(ice_cfg_t *cfg);
 int ice_client_send_data(void *data, int len);
+int ice_client_get_valid_peer(struct sockaddr* dst);
+
 
 int ice_peer_init(ice_cfg_t *ice_cfg);
 int ice_peer_start_nego(ice_cfg_t *cfg);
 int ice_peer_send_data(void *data, int len);
+int ice_peer_get_valid_peer(struct sockaddr* dst);
+
 
 #ifdef __cplusplus
 }

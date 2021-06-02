@@ -29,7 +29,7 @@
 
 static ice_cfg_t *g_ice_cfg = NULL;
 
-#define THIS_FILE   "bice_peer.c"
+#define THIS_FILE   "ice_peer.c"
 
 
 /* For this demo app, configure longer STUN keep-alive time
@@ -181,7 +181,7 @@ static pj_status_t handle_events(unsigned max_msec, unsigned *p_count)
 	c = pj_ioqueue_poll( icedemo.ice_cfg.stun_cfg.ioqueue, &timeout);
 	if (c < 0) {
 	    pj_status_t err = pj_get_netos_error();
-	    pj_thread_sleep(PJ_TIME_VAL_MSEC(timeout));
+	   // pj_thread_sleep(PJ_TIME_VAL_MSEC(timeout));
 	    if (p_count)
 		*p_count = count;
 	    return err;
@@ -209,7 +209,8 @@ static int icedemo_worker_thread(void *unused)
     PJ_UNUSED_ARG(unused);
 
     while (!icedemo.thread_quit_flag) {
-	handle_events(500, NULL);
+	//handle_events(500, NULL);
+	handle_events(1, NULL);
     }
 
     return 0;
@@ -236,11 +237,32 @@ static void cb_on_rx_data(pj_ice_strans *ice_st,
     // Don't do this! It will ruin the packet buffer in case TCP is used!
     //((char*)pkt)[size] = '\0';
 
+#if 0
     PJ_LOG(3,(THIS_FILE, "Component %d: received %d bytes data from %s: \"%.*s\"",
 	      comp_id, size,
 	      pj_sockaddr_print(src_addr, ipstr, sizeof(ipstr), 3),
 	      (unsigned)size,
 	      (char*)pkt));
+#endif
+    struct sockaddr_in src = {0};
+    struct sockaddr_in dest = {0};
+    const pj_ice_sess_check *valid_pair = pj_ice_strans_get_valid_pair(ice_st, 1); 
+    if (!valid_pair) {
+        printf ("%s, warning! no local candidate\n", __func__);
+        return;
+    }
+
+    dest.sin_family = PJ_AF_INET;
+    dest.sin_addr = *(struct in_addr*)pj_sockaddr_get_addr(&valid_pair->lcand->addr);
+    dest.sin_port = htons((unsigned short)pj_sockaddr_get_port(&valid_pair->lcand->addr));
+    
+    src.sin_family = PJ_AF_INET;
+    src.sin_addr = *(struct in_addr*)pj_sockaddr_get_addr(src_addr);
+    src.sin_port = htons((unsigned short)pj_sockaddr_get_port(src_addr));
+    
+    if (g_ice_cfg && g_ice_cfg->cb_on_rx_pkt) {
+        g_ice_cfg->cb_on_rx_pkt(pkt, (int)size, (struct sockaddr*)&src, (struct sockaddr*)&dest);
+    }
 }
 
 /*
@@ -986,7 +1008,7 @@ static void icedemo_set_remote_sdp(const char* remote_sdp)
         cur++;
     }
     linebuf[i] = 0;
-    printf("read: %s\n", linebuf);
+//    printf("read: %s\n", linebuf);
 
 	len = strlen(linebuf);
 	while (len && (linebuf[len-1] == '\r' || linebuf[len-1] == '\n'))
@@ -1223,7 +1245,7 @@ static void icedemo_start_nego(void)
 /*
  * Send application data to remote agent.
  */
-static void icedemo_send_data(unsigned comp_id, const char *data)
+static void icedemo_send_data(unsigned comp_id, const char *data, int len)
 {
     pj_status_t status;
 
@@ -1268,7 +1290,7 @@ static void icedemo_send_data(unsigned comp_id, const char *data)
         pj_sockaddr_print(&valid_pair->lcand->addr, lip, sizeof(lip), 3);
 		pj_sockaddr_print(&valid_pair->rcand->addr, rip, sizeof(rip), 3);	
         
-        status = pj_ice_strans_sendto2(icedemo.icest, comp_id, data, strlen(data),
+        status = pj_ice_strans_sendto2(icedemo.icest, comp_id, data, len,
     				   &valid_pair->rcand->addr,
     				   pj_sockaddr_get_len(&valid_pair->rcand->addr));
 
@@ -1284,6 +1306,21 @@ static void icedemo_send_data(unsigned comp_id, const char *data)
 #endif
 }
 
+int ice_peer_get_valid_peer(struct sockaddr* dst)
+{
+    struct sockaddr_in *pSockAddr = dst;
+
+    const pj_ice_sess_check *valid_pair = pj_ice_strans_get_valid_pair(icedemo.icest, 1); 
+    if (!valid_pair) {
+        printf ("%s, warning! no valid candidate pair\n", __func__);
+        return -1;
+    }
+
+    pSockAddr->sin_family = PJ_AF_INET;
+    pSockAddr->sin_addr = *(struct in_addr*)pj_sockaddr_get_addr(&valid_pair->rcand->addr);
+    pSockAddr->sin_port = htons((unsigned short)pj_sockaddr_get_port(&valid_pair->rcand->addr));  
+    return 0;
+}
 
 /*
  * Display help for the menu.
@@ -1415,7 +1452,7 @@ static void icedemo_console(void)
 		char *data = comp + strlen(comp) + 1;
 		if (!data)
 		    data = "";
-		icedemo_send_data(atoi(comp), data);
+		icedemo_send_data(atoi(comp), data, 0);
 	    }
 
 	} else if (strcmp(cmd, "help")==0 || strcmp(cmd, "h")==0) {
@@ -1511,7 +1548,7 @@ static void on_conack(struct umqtt_client *cl, bool sp, int code)
 {
     struct umqtt_topic topics[] = {
         {
-            .topic = JUICE_MQTT_TOPIC_ICE_PEER,
+            .topic = g_ice_cfg->my_channel,
             .qos = UMQTT_QOS0
         }
     #if 0
@@ -1573,20 +1610,25 @@ static void on_publish(struct umqtt_client *cl, const char *topic, int topic_len
     int resp_msg_type = -1;
     char send_buf[JUICE_MQTT_MSG_MAX_SIZE];
     int send_len = 0;
-
-    if (0 == strcmp (topic, JUICE_MQTT_TOPIC_ICE_PEER)) {
+    static char last_peer_channel[64] = {0};
+    if (0 == strcmp (topic, g_ice_cfg->my_channel)) {
         msg_type = *((int*)payload);
         msg_type = ntohl(msg_type);
 
         msg = (char*)payload + sizeof(msg_type);
+        const char *peer_topic = msg;
         printf("Received publish type:%d, msg:\n%s\n", msg_type, msg);
 
         switch (msg_type) {
             case JUICE_MQTT_MSG_TYPE_CONNECT_REQ:
+                if (0 == strcmp(last_peer_channel, peer_topic)) {
+                    printf ("It's a repeat login msg, ignore it\n");
+                    return;
+                }
+                strcpy (last_peer_channel, peer_topic);
                 resp_msg_type = JUICE_MQTT_MSG_TYPE_CONNECT_RESP;
                 send_len = make_publish_msg(send_buf, sizeof(send_buf), resp_msg_type, msg);
-                //mqtt_publish(&client, JUICE_MQTT_TOPIC_ICE_CLIENT, send_buf, send_len, MQTT_PUBLISH_QOS_0);
-                cl->publish(cl, JUICE_MQTT_TOPIC_ICE_CLIENT, send_buf, send_len, UMQTT_QOS0, false);
+                cl->publish(cl, peer_topic, send_buf, send_len, UMQTT_QOS0, false);
                 
                 encode_session(sdp, sizeof (sdp));
                 sdp[strlen(sdp)] = '\n';
@@ -1594,8 +1636,7 @@ static void on_publish(struct umqtt_client *cl, const char *topic, int topic_len
 	            printf("Local description:\n%s\n", sdp);
                 resp_msg_type = JUICE_MQTT_MSG_TYPE_SDP;
                 send_len = make_publish_msg(send_buf, sizeof(send_buf), resp_msg_type, sdp);
-               // mqtt_publish(&client, JUICE_MQTT_TOPIC_ICE_CLIENT, send_buf, send_len, MQTT_PUBLISH_QOS_0);
-                cl->publish(cl, JUICE_MQTT_TOPIC_ICE_CLIENT, send_buf, send_len, UMQTT_QOS0, false);
+                cl->publish(cl, peer_topic, send_buf, send_len, UMQTT_QOS0, false);
                 break;
             case JUICE_MQTT_MSG_TYPE_SDP:
                 icedemo_set_remote_sdp(msg);
@@ -1687,7 +1728,8 @@ static void do_connect(struct ev_loop *loop, struct ev_timer *w, int revents)
 
 static void do_send(struct ev_loop *loop, struct ev_timer *w, int revents)
 {
-    icedemo_send_data(1, "[from peer]......\n");
+    const char *msg = "[from peer]......\n";
+    icedemo_send_data(1, msg, strlen(msg)+1);
 }
 
 static void signal_cb(struct ev_loop *loop, ev_signal *w, int revents)
@@ -1719,6 +1761,7 @@ int ice_peer_init(ice_cfg_t *ice_cfg)
         return -1;
     }
 
+//    strcat (ice_cfg->my_channel, JUICE_MQTT_TOPIC_ICE_PEER);
     g_ice_cfg = ice_cfg;            
     struct ev_loop* loop = ice_cfg->loop;
     if (NULL == loop) {
@@ -1774,7 +1817,7 @@ int ice_peer_start_nego(ice_cfg_t *cfg)
 
 int ice_peer_send_data(void *data, int len)
 {
-    icedemo_send_data(1, (char *)data);
+    icedemo_send_data(1, (char *)data, len);
     return 0;
 }
 
