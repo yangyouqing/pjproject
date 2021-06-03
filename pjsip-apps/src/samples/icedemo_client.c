@@ -50,6 +50,11 @@ static void do_send(struct ev_loop *loop, struct ev_timer *w, int revents)
     bp2p_ice_send(msg, strlen(msg) + 1);
 }
 
+static void On_idle()
+{
+    
+}
+
 int main(int argc, char *argv[])
 {
     ice_cfg_t ice_cfg = {0};
@@ -64,6 +69,7 @@ int main(int argc, char *argv[])
     ice_cfg.turn_password = "yyq";
     ice_cfg.turn_fingerprint = 1;
     ice_cfg.cb_on_rx_pkt = on_recv_pkt;
+    ice_cfg.cb_on_idle_running = On_idle;
 
     bp2p_ice_init (&ice_cfg);
 

@@ -40,6 +40,7 @@ typedef struct ice_cfg{
 	char*    turn_password;
 	int   turn_fingerprint;
     void (*cb_on_rx_pkt)(void * pkt, int size, struct sockaddr* src, struct sockaddr* dest);
+    void (*cb_on_idle_running)();  // just for app level use, maybe send pkt should be reside in same thread with recv thread
     void (*cb_on_status_change)(ice_status_t s);
 }ice_cfg_t;
 

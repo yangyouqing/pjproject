@@ -210,7 +210,10 @@ static int icedemo_worker_thread(void *unused)
 
     while (!icedemo.thread_quit_flag) {
 	//handle_events(500, NULL);
-	handle_events(1, NULL);
+	    handle_events(1, NULL);
+        if (NULL != g_ice_cfg && NULL != g_ice_cfg->cb_on_idle_running) {
+            g_ice_cfg->cb_on_idle_running();
+        }
     }
 
     return 0;
